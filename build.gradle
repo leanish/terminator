@@ -36,7 +36,7 @@ tasks.withType(JavaCompile).configureEach {
         disableWarningsInGeneratedCode = true
         errorproneArgs.addAll([
             '-Xep:NullAway:ERROR',
-            '-XepOpt:NullAway:AnnotatedPackages=io.github.leanish.terminator'
+            '-XepOpt:NullAway:AnnotatedPackages=io.github.leanish'
         ])
     }
 }
