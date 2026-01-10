@@ -24,7 +24,7 @@ repositories {
 dependencies {
     compileOnly 'org.jspecify:jspecify:1.0.0'
     testCompileOnly 'org.jspecify:jspecify:1.0.0'
-    errorprone 'com.google.errorprone:error_prone_core:2.42.0'
+    errorprone 'com.google.errorprone:error_prone_core:2.46.0'
     errorprone 'com.uber.nullaway:nullaway:0.12.15'
     testImplementation 'org.junit.jupiter:junit-jupiter:6.0.2'
     testImplementation 'org.assertj:assertj-core:3.27.6'
@@ -32,6 +32,8 @@ dependencies {
 }
 
 tasks.withType(JavaCompile).configureEach {
+    // Required from errorprone 2.46.0+ on JDK 21
+    options.compilerArgs.add("-XDaddTypeAnnotationsToSymbol=true")
     options.errorprone {
         disableWarningsInGeneratedCode = true
         errorproneArgs.addAll([
