@@ -4,7 +4,7 @@ plugins {
 }
 
 group = 'io.github.leanish'
-version = '0.1.0'
+version = '0.1.1-SNAPSHOT'
 description = 'Coordinates shutdown of blocking and non-blocking services.'
 
 def jdkVersion = 21
