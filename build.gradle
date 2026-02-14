@@ -1,100 +1,20 @@
 plugins {
     id 'java-library'
-    id 'maven-publish'
-    id 'com.diffplug.spotless' version '8.1.0'
-    id 'net.ltgt.errorprone' version '4.4.0'
+    id 'io.github.leanish.java-conventions' version '0.3.0-SNAPSHOT'
 }
 
 group = 'io.github.leanish'
 version = '0.1.0'
+description = 'Coordinates shutdown of blocking and non-blocking services.'
 
+def jdkVersion = 21
 java {
+    sourceCompatibility = JavaVersion.toVersion(jdkVersion)
     toolchain {
-        languageVersion = JavaLanguageVersion.of(21)
+        languageVersion = JavaLanguageVersion.of(jdkVersion)
     }
-    withSourcesJar()
-    withJavadocJar()
-}
-
-repositories {
-    mavenLocal()
-    mavenCentral()
-}
-
-dependencies {
-    compileOnly 'org.jspecify:jspecify:1.0.0'
-    testCompileOnly 'org.jspecify:jspecify:1.0.0'
-    errorprone 'com.google.errorprone:error_prone_core:2.46.0'
-    errorprone 'com.uber.nullaway:nullaway:0.12.15'
-    testImplementation 'org.junit.jupiter:junit-jupiter:6.0.2'
-    testImplementation 'org.assertj:assertj-core:3.27.6'
-    testRuntimeOnly 'org.junit.platform:junit-platform-launcher:6.0.2'
 }
 
 tasks.withType(JavaCompile).configureEach {
-    // Required from errorprone 2.46.0+ on JDK 21
-    options.compilerArgs.add("-XDaddTypeAnnotationsToSymbol=true")
-    options.errorprone {
-        disableWarningsInGeneratedCode = true
-        errorproneArgs.addAll([
-            '-Xep:NullAway:ERROR',
-            '-XepOpt:NullAway:AnnotatedPackages=io.github.leanish'
-        ])
-    }
-}
-
-tasks.withType(Test).configureEach {
-    useJUnitPlatform()
-}
-
-publishing {
-    publications {
-        create('mavenJava', MavenPublication) {
-            from components.java
-            pom {
-                name = 'Terminator'
-                description = 'Coordinates shutdown of blocking and non-blocking services.'
-                url = 'https://github.com/lean-ish/terminator'
-                licenses {
-                    license {
-                        name = 'The MIT License'
-                        url = 'https://opensource.org/licenses/MIT'
-                    }
-                }
-                developers {
-                    developer {
-                        id = 'lean-ish'
-                        name = 'Leandro Aguiar'
-                        url = 'https://github.com/lean-ish'
-                    }
-                }
-                scm {
-                    url = 'https://github.com/lean-ish/terminator'
-                    connection = 'scm:git:https://github.com/lean-ish/terminator.git'
-                    developerConnection = 'scm:git:ssh://git@github.com/lean-ish/terminator.git'
-                }
-            }
-        }
-    }
-
-    repositories {
-        mavenLocal()
-        maven {
-            name = 'GitHubPackages'
-            url = uri('https://maven.pkg.github.com/lean-ish/terminator')
-            credentials {
-                username = project.findProperty('gpr.user') ?: System.getenv('GITHUB_ACTOR')
-                password = project.findProperty('gpr.key') ?: System.getenv('GITHUB_TOKEN')
-            }
-        }
-    }
-}
-
-spotless {
-    java {
-        trimTrailingWhitespace()
-        endWithNewline()
-        removeUnusedImports()
-        licenseHeaderFile 'LICENSE_HEADER'
-    }
+    options.release.set(jdkVersion)
 }

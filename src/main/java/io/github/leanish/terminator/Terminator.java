@@ -105,7 +105,7 @@ public final class Terminator {
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 throw e;
-            } catch (RuntimeException | Error ex) {
+            } catch (RuntimeException ex) {
                 if (failure == null) {
                     failure = new TerminationException("Failed to terminate registered services", ex);
                 } else {
