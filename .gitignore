@@ -1,6 +1,18 @@
-# Ignore Gradle project-specific cache directory
-.gradle
+# Gradle
+.gradle/
+.gradle-*/
+build/
 
-# Ignore Gradle build output directory
-build
-/.idea/
+# IDE
+.idea/
+
+# OS
+.DS_Store
+
+# Other
+.claude/
+.kotlin/
+.sandcastle/
+node_modules/
+package.json
+package-lock.json
