@@ -8,7 +8,7 @@
 
 ### Security
 - Floor Guava at `33.7.2-jre` in Error Prone and Checkstyle configurations to address
-  [GHSA-xxph-c9ww-hj94](https://github.com/advisories/GHSA-xxph-c9ww-hj94), preserving the configured Checkstyle tool version.
+  [GHSA-xxph-c9ww-hj94](https://github.com/google/guava/security/advisories/GHSA-xxph-c9ww-hj94), preserving the configured Checkstyle tool version.
 
 ## 0.1.0 - 2025-09-30
 - Introduce the `Terminator` coordinator with blocking and non-blocking service support plus interrupt-aware shutdown orchestration.

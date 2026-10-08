@@ -133,9 +133,12 @@ class TerminatorTest {
         });
         interrupter.start();
 
-        assertThatThrownBy(terminator::terminate).isInstanceOf(InterruptedException.class);
-        assertThat(mainThread.isInterrupted()).isTrue();
-        interrupter.join();
+        try {
+            assertThatThrownBy(terminator::terminate).isInstanceOf(InterruptedException.class);
+            assertThat(mainThread.isInterrupted()).isTrue();
+        } finally {
+            joinAndRestoreInterruptStatus(interrupter);
+        }
     }
 
     @Test
@@ -239,6 +242,23 @@ class TerminatorTest {
         long millis = TimeUnit.NANOSECONDS.toMillis(totalNanos);
         int nanos = (int) (totalNanos - TimeUnit.MILLISECONDS.toNanos(millis));
         Thread.sleep(millis, nanos);
+    }
+
+    private static void joinAndRestoreInterruptStatus(Thread thread) {
+        boolean interrupted = Thread.interrupted();
+        try {
+            while (thread.isAlive()) {
+                try {
+                    thread.join();
+                } catch (InterruptedException ignored) {
+                    interrupted = true;
+                }
+            }
+        } finally {
+            if (interrupted) {
+                Thread.currentThread().interrupt();
+            }
+        }
     }
 
     private record RecordingService(List<Integer> order, int id) implements BlockingTerminable {
