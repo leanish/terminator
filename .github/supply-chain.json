@@ -1,0 +1,17 @@
+{
+  "gradle": { "builds": ["."] },
+  "maven": {
+    "repositories": [
+      "https://repo1.maven.org/maven2",
+      "https://plugins.gradle.org/m2"
+    ]
+  },
+  "releaseAgeDays": 7,
+  "ownPackages": {
+    "Maven": {
+      "groups": ["io.github.leanish"],
+      "pluginIdPrefixes": ["io.github.leanish."]
+    },
+    "GitHub Actions": { "owners": ["leanish"] }
+  }
+}
