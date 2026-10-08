@@ -1,0 +1,15 @@
+{
+  "floors": [
+    {
+      "ecosystem": "Maven",
+      "package": "com.google.guava:guava",
+      "version": "33.7.2-jre",
+      "declaredIn": "build.gradle",
+      "selector": [":annotationProcessor", ":checkstyle", ":testAnnotationProcessor"],
+      "purpose": "security",
+      "advisories": ["GHSA-xxph-c9ww-hj94"],
+      "reason": "Pins the Guava versions resolved in the Error Prone and Checkstyle tool graphs above the affected range",
+      "added": "2026-10-08"
+    }
+  ]
+}
