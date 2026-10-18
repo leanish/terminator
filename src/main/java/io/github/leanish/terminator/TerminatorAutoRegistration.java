@@ -7,26 +7,30 @@ package io.github.leanish.terminator;
 
 import java.util.Objects;
 
-import org.jspecify.annotations.Nullable;
-
-/** Registers services that implement a termination interface or {@link AutoCloseable}. */
+/**
+ * Registers managed services with a {@link Terminator} by inspecting their shutdown annotations or marker interfaces.
+ */
 public final class TerminatorAutoRegistration {
 
     private final Terminator terminator;
 
-    /** Creates a registrar for the supplied coordinator. */
+    /**
+     * Creates a new registrar that adds services to the supplied {@link Terminator} instance.
+     */
     public TerminatorAutoRegistration(Terminator terminator) {
         this.terminator = Objects.requireNonNull(terminator, "terminator");
     }
 
     /**
-     * Registers a supported service. Non-blocking services take precedence over blocking services,
-     * followed by AutoCloseable. Objects with none of these contracts are ignored.
+     * Attempts to register the supplied service with the underlying {@link Terminator}. Services are recognised when
+     * they implement {@link BlockingTerminable}, {@link NonBlockingTerminable}, implement {@link AutoCloseable}, or
+     * expose appropriately annotated shutdown methods.
      *
      * @param candidate service to inspect
      */
     public void register(Object candidate) {
         Objects.requireNonNull(candidate, "candidate");
+
         if (candidate instanceof NonBlockingTerminable nonBlocking) {
             terminator.register(nonBlocking);
             return;
@@ -35,34 +39,22 @@ public final class TerminatorAutoRegistration {
             terminator.register(blocking);
             return;
         }
-        if (candidate instanceof AutoCloseable closeable) {
-            terminator.register(new AutoCloseableTerminable(closeable));
+        TerminationRegistration registration = TerminationIntrospector.inspect(candidate);
+        if (registration.nonBlocking() != null) {
+            terminator.register(registration.nonBlocking());
+        } else if (registration.blocking() != null) {
+            terminator.register(registration.blocking());
         }
     }
 
-    /** Registers supported elements, skipping null entries. */
-    public void registerAll(Iterable<? extends @Nullable Object> candidates) {
+    /**
+     * Attempts to register every element of {@code candidates}.
+     */
+    public void registerAll(Iterable<?> candidates) {
         Objects.requireNonNull(candidates, "candidates");
         for (Object candidate : candidates) {
             if (candidate != null) {
                 register(candidate);
-            }
-        }
-    }
-
-    private record AutoCloseableTerminable(AutoCloseable closeable) implements BlockingTerminable {
-
-        @Override
-        public void terminate() throws InterruptedException {
-            try {
-                closeable.close();
-            } catch (InterruptedException interrupted) {
-                Thread.currentThread().interrupt();
-                throw interrupted;
-            } catch (RuntimeException runtime) {
-                throw runtime;
-            } catch (Exception failure) {
-                throw new IllegalStateException("Could not close registered service", failure);
             }
         }
     }

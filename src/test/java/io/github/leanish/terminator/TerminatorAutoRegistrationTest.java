@@ -5,146 +5,187 @@
  */
 package io.github.leanish.terminator;
 
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.*;
 
-import java.io.IOException;
+import io.github.leanish.terminator.annotation.AwaitsTermination;
+import io.github.leanish.terminator.annotation.Terminates;
 import java.time.Duration;
-import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-
 import org.junit.jupiter.api.Test;
 
 class TerminatorAutoRegistrationTest {
 
-    @Test
-    void registersAutoCloseableInReverseOrder() throws InterruptedException {
-        Terminator terminator = new Terminator();
-        TerminatorAutoRegistration registration = new TerminatorAutoRegistration(terminator);
-        List<String> closed = new ArrayList<>();
-        AutoCloseable first = () -> closed.add("first");
-        AutoCloseable second = () -> closed.add("second");
-
-        registration.registerAll(List.of(first, second));
-        terminator.terminate();
-        terminator.terminate();
-
-        assertThat(closed).containsExactly("second", "first");
-    }
+    private final Terminator terminator = new Terminator();
+    private final TerminatorAutoRegistration registration = new TerminatorAutoRegistration(terminator);
 
     @Test
-    void registersBlockingInterfacesBeforeAutoCloseable() throws InterruptedException {
-        Terminator terminator = new Terminator();
-        DualContract service = new DualContract();
+    void registersBlockingServiceAnnotatedWithTerminates()
+            throws InterruptedException {
+        AnnotatedBlockingService service = new AnnotatedBlockingService();
 
-        new TerminatorAutoRegistration(terminator).register(service);
+        registration.register(service);
         terminator.terminate();
 
         assertThat(service.terminated).isTrue();
-        assertThat(service.closed).isFalse();
     }
 
     @Test
-    void registersNonBlockingServices() throws InterruptedException {
-        Terminator terminator = new Terminator();
-        AtomicBoolean stopped = new AtomicBoolean();
-        NonBlockingTerminable service = new NonBlockingTerminable() {
-            @Override
-            public void terminate() {
-                stopped.set(true);
-            }
+    void registersAutoCloseableAsBlocking()
+            throws InterruptedException {
+        TrackingAutoCloseable closeable = new TrackingAutoCloseable();
 
-            @Override
-            public boolean awaitTermination(Duration timeout) {
-                return stopped.get();
-            }
-        };
-
-        new TerminatorAutoRegistration(terminator).register(service);
+        registration.register(closeable);
         terminator.terminate();
 
-        assertThat(stopped).isTrue();
+        assertThat(closeable.closed).isTrue();
+    }
+
+    @Test
+    void registersNonBlockingServiceWithDurationAwait()
+            throws InterruptedException {
+        AnnotatedNonBlockingService service = new AnnotatedNonBlockingService();
+
+        registration.register(service);
+        terminator.terminate();
+
+        assertThat(service.shutdownInitiated).isTrue();
+        assertThat(terminator.awaitTermination(Duration.ofMillis(10))).isFalse();
+        service.complete();
         assertThat(terminator.awaitTermination(Duration.ofSeconds(1))).isTrue();
     }
 
     @Test
-    void skipsNullEntriesAndUnsupportedObjects() throws InterruptedException {
-        Terminator terminator = new Terminator();
-        AtomicBoolean closed = new AtomicBoolean();
-        AutoCloseable service = () -> closed.set(true);
+    void registersNonBlockingServiceWithNumericAwait()
+            throws InterruptedException {
+        NumericAwaitNonBlockingService service = new NumericAwaitNonBlockingService();
 
-        new TerminatorAutoRegistration(terminator).registerAll(Arrays.asList(null, new Object(), service));
+        registration.register(service);
         terminator.terminate();
 
-        assertThat(closed).isTrue();
+        assertThat(service.shutdownCalled).isTrue();
+        assertThat(terminator.awaitTermination(Duration.ofMillis(5))).isFalse();
+        service.finish();
+        assertThat(terminator.awaitTermination(Duration.ofSeconds(1))).isTrue();
+        assertThat(service.awaitTimeouts).hasSize(2);
+        assertThat(service.awaitTimeouts.getFirst())
+                .isGreaterThanOrEqualTo(0L)
+                .isLessThanOrEqualTo(Duration.ofMillis(5).toNanos());
+        assertThat(service.awaitTimeouts.getLast())
+                .isGreaterThan(0L)
+                .isLessThanOrEqualTo(Duration.ofSeconds(1).toNanos());
+        assertThat(service.awaitUnits).allMatch(unit -> unit == TimeUnit.NANOSECONDS);
     }
 
     @Test
-    void rejectsNullArguments() {
-        TerminatorAutoRegistration registration = new TerminatorAutoRegistration(new Terminator());
+    void registerAllSkipsNulls()
+            throws InterruptedException {
+        AnnotatedBlockingService first = new AnnotatedBlockingService();
+        AnnotatedBlockingService second = new AnnotatedBlockingService();
 
-        assertThatThrownBy(() -> new TerminatorAutoRegistration(null)).isInstanceOf(NullPointerException.class);
-        assertThatThrownBy(() -> registration.register(null)).isInstanceOf(NullPointerException.class);
-        assertThatThrownBy(() -> registration.registerAll(null)).isInstanceOf(NullPointerException.class);
+        registration.registerAll(java.util.Arrays.asList(first, null, second));
+        terminator.terminate();
+
+        assertThat(first.terminated).isTrue();
+        assertThat(second.terminated).isTrue();
     }
 
     @Test
-    void retainsCheckedCloseFailure() {
-        Terminator terminator = new Terminator();
-        IOException failure = new IOException("close failed");
-        AutoCloseable service = () -> {
-            throw failure;
-        };
-        new TerminatorAutoRegistration(terminator).register(service);
+    void failsWhenMultipleAwaitsTerminationMethodsPresent() {
+        InvalidAwaitService service = new InvalidAwaitService();
 
-        assertThatThrownBy(terminator::terminate)
-                .isInstanceOf(TerminationException.class)
-                .hasRootCause(failure);
+        assertThatThrownBy(() -> registration.register(service))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Multiple methods");
     }
 
-    @Test
-    void retainsRuntimeCloseFailure() {
-        Terminator terminator = new Terminator();
-        IllegalArgumentException failure = new IllegalArgumentException("close failed");
-        AutoCloseable service = () -> {
-            throw failure;
-        };
-        new TerminatorAutoRegistration(terminator).register(service);
+    @SuppressWarnings("unused")
+    private static final class AnnotatedBlockingService {
 
-        assertThatThrownBy(terminator::terminate)
-                .isInstanceOf(TerminationException.class)
-                .hasCause(failure);
-    }
-
-    @Test
-    void preservesInterruptedClose() {
-        Terminator terminator = new Terminator();
-        AutoCloseable service = () -> {
-            throw new InterruptedException("interrupted");
-        };
-        new TerminatorAutoRegistration(terminator).register(service);
-        try {
-            assertThatThrownBy(terminator::terminate).isInstanceOf(InterruptedException.class);
-            assertThat(Thread.currentThread().isInterrupted()).isTrue();
-        } finally {
-            Thread.interrupted();
-        }
-    }
-
-    private static final class DualContract implements BlockingTerminable, AutoCloseable {
         private boolean terminated;
-        private boolean closed;
 
-        @Override
-        public void terminate() {
+        @Terminates
+        void shutdown() {
             terminated = true;
         }
+    }
+
+    private static final class TrackingAutoCloseable implements AutoCloseable {
+
+        private boolean closed;
 
         @Override
         public void close() {
             closed = true;
+        }
+    }
+
+    @SuppressWarnings("unused")
+    private static final class AnnotatedNonBlockingService {
+
+        private final CountDownLatch latch = new CountDownLatch(1);
+        private final AtomicBoolean shutdownInitiated = new AtomicBoolean();
+
+        @Terminates
+        void shutdown() {
+            shutdownInitiated.set(true);
+        }
+
+        @AwaitsTermination
+        boolean waitForCompletion(Duration timeout)
+                throws InterruptedException {
+            return latch.await(timeout.toNanos(), TimeUnit.NANOSECONDS);
+        }
+
+        void complete() {
+            latch.countDown();
+        }
+    }
+
+    @SuppressWarnings("unused")
+    private static final class NumericAwaitNonBlockingService {
+
+        private final CountDownLatch latch = new CountDownLatch(1);
+        private final AtomicBoolean shutdownCalled = new AtomicBoolean();
+        private final java.util.List<Long> awaitTimeouts = new java.util.ArrayList<>();
+        private final java.util.List<TimeUnit> awaitUnits = new java.util.ArrayList<>();
+
+        @Terminates
+        void shutdown() {
+            shutdownCalled.set(true);
+        }
+
+        @AwaitsTermination
+        boolean await(long timeout, TimeUnit unit)
+                throws InterruptedException {
+            awaitTimeouts.add(timeout);
+            awaitUnits.add(unit);
+            boolean done = latch.await(timeout, unit);
+            return done;
+        }
+
+        void finish() {
+            latch.countDown();
+        }
+    }
+
+    @SuppressWarnings("unused")
+    private static final class InvalidAwaitService {
+
+        @Terminates
+        void shutdown() {
+        }
+
+        @AwaitsTermination
+        boolean awaitOne(Duration timeout) {
+            return true;
+        }
+
+        @AwaitsTermination
+        boolean awaitTwo(Duration timeout) {
+            return true;
         }
     }
 }

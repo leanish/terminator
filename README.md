@@ -9,7 +9,7 @@ The coordinator makes sure non-blocking services are signalled first and waited 
 
 ## Key features
 
-- Register any number of blocking or non-blocking services using distinct marker interfaces.
+- Register blocking, non-blocking, or `AutoCloseable` services manually or through annotations.
 - Initiate shutdown once with `Terminator#terminate()`, or call it repeatedly without side effects.
 - Wait for the async tail of shutdown to finish with `awaitTermination(Duration)`; negative durations are treated as zero, and a zero wait is still passed through to the services.
 - Aggregates failures thrown during termination, keeping the first as the cause and suppressing the rest.
@@ -74,20 +74,42 @@ if (!finished) {
 }
 ```
 
-### Register AutoCloseable services
+### Use annotations and auto-registration
 
-`TerminatorAutoRegistration` registers `NonBlockingTerminable`, `BlockingTerminable`,
-and `AutoCloseable` services, in that precedence order. `close()` runs as a blocking
-shutdown; checked failures keep their cause and interruption remains visible.
+Instead of implementing the marker interfaces directly, mark your shutdown methods and let the registrar inspect them:
 
 ```java
+class AsyncWorkerPool {
+    private final ExecutorService executor;
+
+    @Terminates
+    void shutdown() {
+        executor.shutdown();
+    }
+
+    @AwaitsTermination
+    boolean awaitTermination(Duration timeout) throws InterruptedException {
+        return executor.awaitTermination(timeout.toNanos(), TimeUnit.NANOSECONDS);
+    }
+}
+
 Terminator terminator = new Terminator();
 TerminatorAutoRegistration registration = new TerminatorAutoRegistration(terminator);
-registration.registerAll(List.of(httpServer, queueProcessor, closeableResource));
+
+registration.registerAll(List.of(
+        httpServer,         // implements BlockingTerminable
+        queueProcessor,     // implements NonBlockingTerminable
+        new AsyncWorkerPool() // annotated service
+));
 ```
 
-Unsupported objects are ignored; `registerAll` also skips null entries. Registration
-is explicit: this helper does not scan a dependency injection container.
+The registrar recognises:
+
+- `BlockingTerminable` and `NonBlockingTerminable` implementations.
+- Methods annotated with `@Terminates` and `@AwaitsTermination`.
+- Any `AutoCloseable`, where `close()` is treated as a blocking shutdown.
+
+This makes it easy to plug into any dependency injection container: resolve the managed beans and pass them to `registerAll`.
 
 ## Building & testing
 
