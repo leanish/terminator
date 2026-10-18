@@ -1,0 +1,63 @@
+diff --git a/README.md b/README.md
+index d473095..925f93e 100644
+--- a/README.md
++++ b/README.md
+@@ -28,7 +28,7 @@ dependencies {
+ ### Implement services
+ 
+ ```java
+-final class HttpServer implements BlockingTerminable {
++class HttpServer implements BlockingTerminable {
+     private final Server server;
+ 
+     HttpServer(Server server) {
+@@ -36,30 +36,26 @@ final class HttpServer implements BlockingTerminable {
+     }
+ 
+     @Override
+-    public void terminate() throws InterruptedException {
++    public void terminate()
++            throws InterruptedException {
+         server.stop(); // blocks until fully stopped
+     }
+ }
+ 
+-final class MetricsReporter implements NonBlockingTerminable {
+-    private final ExecutorService executor = Executors.newSingleThreadExecutor();
+-    private final CountDownLatch shutdown = new CountDownLatch(1);
++class QueueProcessor implements NonBlockingTerminable {
++    private final ExecutorService executor;
++
++    ...
+ 
+     @Override
+     public void terminate() {
+-        executor.submit(() -> {
+-            try {
+-                flushAndClose();
+-            } finally {
+-                shutdown.countDown();
+-                executor.shutdown();
+-            }
+-        });
++        executor.shutdown(); // starts shutdown but returns immediately
+     }
+ 
+     @Override
+-    public boolean awaitTermination(Duration timeout) throws InterruptedException {
+-        return shutdown.await(timeout.toNanos(), TimeUnit.NANOSECONDS);
++    public boolean awaitTermination(Duration timeout)
++            throws InterruptedException {
++        return executor.awaitTermination(timeout.toNanos(), TimeUnit.NANOSECONDS);
+     }
+ }
+ ```
+@@ -69,7 +65,7 @@ final class MetricsReporter implements NonBlockingTerminable {
+ ```java
+ Terminator terminator = new Terminator();
+ terminator.register(new HttpServer(server));
+-terminator.register(new MetricsReporter());
++terminator.register(new BackgroundProcessor(workerExecutor));
+ 
+ try {
+     terminator.terminate();

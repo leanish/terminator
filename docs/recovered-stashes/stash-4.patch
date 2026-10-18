@@ -1,0 +1,62 @@
+diff --git a/build.gradle b/build.gradle
+index 18fef39..87ef37e 100644
+--- a/build.gradle
++++ b/build.gradle
+@@ -1,7 +1,8 @@
+ plugins {
+     id 'java-library'
+     id 'maven-publish'
+-    id 'com.diffplug.spotless' version '7.2.1'
++    id 'com.diffplug.spotless' version '8.0.0'
++    id 'net.ltgt.errorprone' version '4.3.0'
+ }
+ 
+ group = 'io.github.leanish'
+@@ -23,11 +24,23 @@ repositories {
+ dependencies {
+     compileOnly 'org.jspecify:jspecify:1.0.0'
+     testCompileOnly 'org.jspecify:jspecify:1.0.0'
++    errorprone 'com.google.errorprone:error_prone_core:2.42.0'
++    errorprone 'com.uber.nullaway:nullaway:0.12.10'
+     testImplementation 'org.junit.jupiter:junit-jupiter:5.13.4'
+     testImplementation 'org.assertj:assertj-core:3.27.6'
+     testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.13.4'
+ }
+ 
++tasks.withType(JavaCompile).configureEach {
++    options.errorprone {
++        disableWarningsInGeneratedCode = true
++        errorproneArgs.addAll([
++            '-Xep:NullAway:ERROR',
++            '-XepOpt:NullAway:AnnotatedPackages=io.github.leanish.terminator'
++        ])
++    }
++}
++
+ tasks.withType(Test).configureEach {
+     useJUnitPlatform()
+ }
+diff --git a/src/test/java/io/github/leanish/terminator/TerminatorTest.java b/src/test/java/io/github/leanish/terminator/TerminatorTest.java
+index d052c5d..f4433e4 100644
+--- a/src/test/java/io/github/leanish/terminator/TerminatorTest.java
++++ b/src/test/java/io/github/leanish/terminator/TerminatorTest.java
+@@ -179,8 +179,9 @@ class TerminatorTest {
+         });
+         shutdownThread.start();
+ 
++        //noinspection LoopConditionNotUpdatedInsideLoop // updated by shutdownThread
+         while (!terminator.isTerminating()) {
+-            Thread.yield();
++            Thread.onSpinWait();
+         }
+ 
+         terminator.terminate();
+@@ -297,7 +298,7 @@ class TerminatorTest {
+         @Override
+         public void terminate() {
+             if (terminateCalls.incrementAndGet() == 1) {
+-                executor.submit(() -> {
++                executor.execute(() -> {
+                     try {
+                         sleep(shutdownDelay);
+                     } catch (InterruptedException e) {

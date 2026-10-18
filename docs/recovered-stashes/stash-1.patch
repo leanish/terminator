@@ -1,0 +1,820 @@
+diff --git a/README.md b/README.md
+index 2c521a2..5396e1e 100644
+--- a/README.md
++++ b/README.md
+@@ -9,7 +9,7 @@ The coordinator makes sure non-blocking services are signalled first and waited
+ 
+ ## Key features
+ 
+-- Register any number of blocking or non-blocking services using distinct marker interfaces.
++- Register blocking, non-blocking, or `AutoCloseable` services manually or through annotations.
+ - Initiate shutdown once with `Terminator#terminate()`, or call it repeatedly without side effects.
+ - Wait for the async tail of shutdown to finish with `awaitTermination(Duration)`; negative durations are treated as zero, and a zero wait is still passed through to the services.
+ - Aggregates failures thrown during termination, keeping the first as the cause and suppressing the rest.
+@@ -74,6 +74,43 @@ if (!finished) {
+ }
+ ```
+ 
++### Use annotations and auto-registration
++
++Instead of implementing the marker interfaces directly, mark your shutdown methods and let the registrar inspect them:
++
++```java
++class AsyncWorkerPool {
++    private final ExecutorService executor;
++
++    @Terminates
++    void shutdown() {
++        executor.shutdown();
++    }
++
++    @AwaitsTermination
++    boolean awaitTermination(Duration timeout) throws InterruptedException {
++        return executor.awaitTermination(timeout.toNanos(), TimeUnit.NANOSECONDS);
++    }
++}
++
++Terminator terminator = new Terminator();
++TerminatorAutoRegistration registration = new TerminatorAutoRegistration(terminator);
++
++registration.registerAll(List.of(
++        httpServer,         // implements BlockingTerminable
++        queueProcessor,     // implements NonBlockingTerminable
++        new AsyncWorkerPool() // annotated service
++));
++```
++
++The registrar recognises:
++
++- `BlockingTerminable` and `NonBlockingTerminable` implementations.
++- Methods annotated with `@Terminates` and `@AwaitsTermination`.
++- Any `AutoCloseable`, where `close()` is treated as a blocking shutdown.
++
++This makes it easy to plug into any dependency injection container: resolve the managed beans and pass them to `registerAll`.
++
+ ## Building & testing
+ 
+ This project uses Gradle 8 and Java 21:
+diff --git a/src/main/java/io/github/leanish/terminator/TerminationIntrospector.java b/src/main/java/io/github/leanish/terminator/TerminationIntrospector.java
+new file mode 100644
+index 0000000..5a38920
+--- /dev/null
++++ b/src/main/java/io/github/leanish/terminator/TerminationIntrospector.java
+@@ -0,0 +1,373 @@
++/*
++ * Copyright (c) 2025 Leandro Aguiar
++ * Licensed under the MIT License.
++ * See LICENSE file in the project root for full license information.
++ */
++package io.github.leanish.terminator;
++
++import io.github.leanish.terminator.annotation.AwaitsTermination;
++import io.github.leanish.terminator.annotation.Terminates;
++import java.lang.annotation.Annotation;
++import java.lang.reflect.InvocationTargetException;
++import java.lang.reflect.Method;
++import java.time.Duration;
++import java.util.ArrayDeque;
++import java.util.ArrayList;
++import java.util.Deque;
++import java.util.HashMap;
++import java.util.HashSet;
++import java.util.List;
++import java.util.Map;
++import java.util.Objects;
++import java.util.Optional;
++import java.util.Set;
++import java.util.concurrent.TimeUnit;
++import org.jspecify.annotations.Nullable;
++
++final class TerminationIntrospector {
++
++    private TerminationIntrospector() {
++    }
++
++    static TerminationRegistration inspect(Object candidate) {
++        Objects.requireNonNull(candidate, "candidate");
++        NonBlockingTerminable nonBlocking = inspectNonBlocking(candidate).orElse(null);
++        if (nonBlocking != null) {
++            return TerminationRegistration.nonBlocking(nonBlocking);
++        }
++        BlockingTerminable blocking = inspectBlocking(candidate).orElse(null);
++        if (blocking != null) {
++            return TerminationRegistration.blocking(blocking);
++        }
++        return TerminationRegistration.empty();
++    }
++
++    private static Optional<NonBlockingTerminable> inspectNonBlocking(Object candidate) {
++        Optional<Method> terminateMethod = locateSingleAnnotatedMethod(candidate, Terminates.class);
++        Optional<Method> awaitMethod = locateSingleAnnotatedMethod(candidate, AwaitsTermination.class);
++        if (awaitMethod.isEmpty()) {
++            return Optional.empty();
++        }
++        Method terminate = terminateMethod.orElseThrow(() -> new IllegalStateException(
++                "Service " + candidate + " declares @AwaitsTermination but no @Terminates method"));
++        validateTerminateSignature(terminate, true);
++        return Optional.of(new AnnotationDrivenNonBlockingTerminable(candidate, terminate, awaitMethod.get()));
++    }
++
++    private static Optional<BlockingTerminable> inspectBlocking(Object candidate) {
++        Optional<Method> terminateMethod = locateSingleAnnotatedMethod(candidate, Terminates.class);
++        Optional<Method> awaitMethod = locateSingleAnnotatedMethod(candidate, AwaitsTermination.class);
++        if (awaitMethod.isPresent()) {
++            return Optional.empty();
++        }
++        if (terminateMethod.isPresent()) {
++            Method terminate = terminateMethod.get();
++            validateTerminateSignature(terminate, false);
++            return Optional.of(new AnnotationDrivenBlockingTerminable(candidate, terminate));
++        }
++        if (candidate instanceof AutoCloseable autoCloseable) {
++            Method closeMethod = findMethod(autoCloseable.getClass(), "close");
++            if (closeMethod != null) {
++                closeMethod.setAccessible(true);
++                return Optional.of(new AutoCloseableTerminable(autoCloseable, closeMethod));
++            }
++        }
++        return Optional.empty();
++    }
++
++    private static Optional<Method> locateSingleAnnotatedMethod(Object candidate, Class<? extends Annotation> annotationType) {
++        Map<MethodSignature, Method> methods = findAnnotatedMethods(candidate.getClass(), annotationType);
++        if (methods.isEmpty()) {
++            return Optional.empty();
++        }
++        if (methods.size() > 1) {
++            throw new IllegalStateException("Multiple methods on " + candidate + " annotated with @" + annotationType.getSimpleName() + "; only one is supported");
++        }
++        Method method = methods.values().iterator().next();
++        method.setAccessible(true);
++        return Optional.of(method);
++    }
++
++    private static Map<MethodSignature, Method> findAnnotatedMethods(Class<?> type, Class<? extends Annotation> annotationType) {
++        Map<MethodSignature, Method> result = new HashMap<>();
++        for (Class<?> candidate : typeHierarchy(type)) {
++            for (Method method : candidate.getDeclaredMethods()) {
++                if (method.isAnnotationPresent(annotationType)) {
++                    MethodSignature signature = MethodSignature.from(method);
++                    result.putIfAbsent(signature, method);
++                }
++            }
++        }
++        return result;
++    }
++
++    private static List<Class<?>> typeHierarchy(Class<?> type) {
++        List<Class<?>> resolved = new ArrayList<>();
++        Deque<Class<?>> stack = new ArrayDeque<>();
++        stack.push(type);
++        while (!stack.isEmpty()) {
++            Class<?> current = stack.pop();
++            if (!resolved.add(current)) {
++                continue;
++            }
++            Class<?> superClass = current.getSuperclass();
++            if (superClass != null && superClass != Object.class) {
++                stack.push(superClass);
++            }
++            for (Class<?> iface : current.getInterfaces()) {
++                stack.push(iface);
++            }
++        }
++        return resolved;
++    }
++
++    private static void validateTerminateSignature(Method method, boolean nonBlocking) {
++        if (method.getParameterCount() != 0) {
++            throw new IllegalStateException("Termination method " + method + " must not declare parameters");
++        }
++        Class<?> returnType = method.getReturnType();
++        if (returnType != void.class && returnType != Void.class) {
++            throw new IllegalStateException("Termination method " + method + " must return void");
++        }
++        if (nonBlocking && throwsInterruptedException(method)) {
++            throw new IllegalStateException("Non-blocking termination method " + method + " must not declare InterruptedException");
++        }
++    }
++
++    private static boolean throwsInterruptedException(Method method) {
++        for (Class<?> exceptionType : method.getExceptionTypes()) {
++            if (exceptionType == InterruptedException.class || InterruptedException.class.isAssignableFrom(exceptionType)) {
++                return true;
++            }
++        }
++        return false;
++    }
++
++    private static @Nullable Method findMethod(Class<?> type, String name) {
++        Set<Class<?>> visited = new HashSet<>();
++        Deque<Class<?>> stack = new ArrayDeque<>();
++        stack.push(type);
++        while (!stack.isEmpty()) {
++            Class<?> current = stack.pop();
++            if (!visited.add(current)) {
++                continue;
++            }
++            for (Method method : current.getDeclaredMethods()) {
++                if (method.getName().equals(name) && method.getParameterCount() == 0) {
++                    return method;
++                }
++            }
++            Class<?> superClass = current.getSuperclass();
++            if (superClass != null) {
++                stack.push(superClass);
++            }
++            for (Class<?> iface : current.getInterfaces()) {
++                stack.push(iface);
++            }
++        }
++        return null;
++    }
++
++    private static final class AnnotationDrivenBlockingTerminable implements BlockingTerminable {
++
++        private final Object target;
++        private final Method terminate;
++
++        private AnnotationDrivenBlockingTerminable(Object target, Method terminate) {
++            this.target = target;
++            this.terminate = terminate;
++        }
++
++        @Override
++        public void terminate()
++                throws InterruptedException {
++            invoke(target, terminate);
++        }
++    }
++
++    private static final class AnnotationDrivenNonBlockingTerminable implements NonBlockingTerminable {
++
++        private final Object target;
++        private final Method terminate;
++        private final Method awaitTermination;
++
++        private AnnotationDrivenNonBlockingTerminable(Object target, Method terminate, Method awaitTermination) {
++            this.target = target;
++            this.terminate = terminate;
++            this.awaitTermination = awaitTermination;
++        }
++
++        @Override
++        public void terminate() {
++            invokeUnchecked(target, terminate);
++        }
++
++        @Override
++        public boolean awaitTermination(Duration timeout)
++                throws InterruptedException {
++            return invokeAwait(timeout);
++        }
++
++        private boolean invokeAwait(Duration timeout)
++                throws InterruptedException {
++            Class<?>[] parameterTypes = awaitTermination.getParameterTypes();
++            Object[] arguments;
++            if (parameterTypes.length == 1 && Duration.class.isAssignableFrom(parameterTypes[0])) {
++                arguments = new Object[] {timeout};
++            } else if (parameterTypes.length == 2
++                    && isNumericType(parameterTypes[0])
++                    && TimeUnit.class.isAssignableFrom(parameterTypes[1])) {
++                long nanos = saturatingToNanos(timeout);
++                Object numeric = adaptNumericArgument(parameterTypes[0], nanos);
++                arguments = new Object[] {numeric, TimeUnit.NANOSECONDS};
++            } else {
++                throw new IllegalStateException("Unsupported @AwaitsTermination signature: " + awaitTermination);
++            }
++            Object result = invoke(target, awaitTermination, arguments);
++            if (!(result instanceof Boolean bool)) {
++                throw new IllegalStateException("Await termination method " + awaitTermination + " must return boolean");
++            }
++            return bool;
++        }
++    }
++
++    private static final class AutoCloseableTerminable implements BlockingTerminable {
++
++        private final AutoCloseable delegate;
++        private final Method closeMethod;
++
++        private AutoCloseableTerminable(AutoCloseable delegate, Method closeMethod) {
++            this.delegate = delegate;
++            this.closeMethod = closeMethod;
++        }
++
++        @Override
++        public void terminate()
++                throws InterruptedException {
++            try {
++                closeMethod.invoke(delegate);
++            } catch (InvocationTargetException e) {
++                Throwable cause = e.getCause();
++                if (cause instanceof InterruptedException interrupted) {
++                    Thread.currentThread().interrupt();
++                    throw interrupted;
++                }
++                if (cause instanceof RuntimeException runtime) {
++                    throw runtime;
++                }
++                if (cause instanceof Error error) {
++                    throw error;
++                }
++                throw new RuntimeException(cause);
++            } catch (IllegalAccessException e) {
++                throw new RuntimeException("Could not invoke AutoCloseable#close", e);
++            }
++        }
++    }
++
++    private static Object invoke(Object target, Method method, Object... arguments)
++            throws InterruptedException {
++        try {
++            return method.invoke(target, arguments);
++        } catch (InvocationTargetException e) {
++            Throwable cause = e.getCause();
++            if (cause instanceof InterruptedException interrupted) {
++                Thread.currentThread().interrupt();
++                throw interrupted;
++            }
++            if (cause instanceof RuntimeException runtime) {
++                throw runtime;
++            }
++            if (cause instanceof Error error) {
++                throw error;
++            }
++            throw new RuntimeException(cause);
++        } catch (IllegalAccessException e) {
++            throw new RuntimeException("Could not invoke method: " + method, e);
++        }
++    }
++
++    private static void invokeUnchecked(Object target, Method method, Object... arguments) {
++        try {
++            method.invoke(target, arguments);
++        } catch (InvocationTargetException e) {
++            Throwable cause = e.getCause();
++            if (cause instanceof RuntimeException runtime) {
++                throw runtime;
++            }
++            if (cause instanceof Error error) {
++                throw error;
++            }
++            throw new RuntimeException(cause);
++        } catch (IllegalAccessException e) {
++            throw new RuntimeException("Could not invoke method: " + method, e);
++        }
++    }
++
++    private static boolean isNumericType(Class<?> type) {
++        return type == long.class
++                || type == Long.class
++                || type == int.class
++                || type == Integer.class;
++    }
++
++    private static Object adaptNumericArgument(Class<?> targetType, long nanos) {
++        long value = nanos;
++        if ((targetType == int.class || targetType == Integer.class) && (nanos > Integer.MAX_VALUE || nanos < Integer.MIN_VALUE)) {
++            value = nanos > 0 ? Integer.MAX_VALUE : Integer.MIN_VALUE;
++        }
++        if (targetType == long.class || targetType == Long.class) {
++            return value;
++        }
++        if (targetType == int.class || targetType == Integer.class) {
++            return (int) value;
++        }
++        throw new IllegalArgumentException("Unsupported numeric type: " + targetType);
++    }
++
++    private static long saturatingToNanos(Duration timeout) {
++        try {
++            return timeout.toNanos();
++        } catch (ArithmeticException overflow) {
++            return Long.MAX_VALUE;
++        }
++    }
++
++    private record MethodSignature(String name, Class<?>[] parameterTypes) {
++
++        private static MethodSignature from(Method method) {
++            return new MethodSignature(method.getName(), method.getParameterTypes());
++        }
++
++        @Override
++        public boolean equals(Object obj) {
++            if (this == obj) {
++                return true;
++            }
++            if (!(obj instanceof MethodSignature other)) {
++                return false;
++            }
++            if (!name.equals(other.name)) {
++                return false;
++            }
++            if (parameterTypes.length != other.parameterTypes.length) {
++                return false;
++            }
++            for (int i = 0; i < parameterTypes.length; i++) {
++                if (parameterTypes[i] != other.parameterTypes[i]) {
++                    return false;
++                }
++            }
++            return true;
++        }
++
++        @Override
++        public int hashCode() {
++            int result = name.hashCode();
++            for (Class<?> parameterType : parameterTypes) {
++                result = 31 * result + parameterType.hashCode();
++            }
++            return result;
++        }
++    }
++}
+diff --git a/src/main/java/io/github/leanish/terminator/TerminationRegistration.java b/src/main/java/io/github/leanish/terminator/TerminationRegistration.java
+new file mode 100644
+index 0000000..4c7c09e
+--- /dev/null
++++ b/src/main/java/io/github/leanish/terminator/TerminationRegistration.java
+@@ -0,0 +1,45 @@
++/*
++ * Copyright (c) 2025 Leandro Aguiar
++ * Licensed under the MIT License.
++ * See LICENSE file in the project root for full license information.
++ */
++package io.github.leanish.terminator;
++
++import org.jspecify.annotations.Nullable;
++
++final class TerminationRegistration {
++
++    private static final TerminationRegistration EMPTY = new TerminationRegistration(null, null);
++
++    @Nullable
++    private final BlockingTerminable blocking;
++    @Nullable
++    private final NonBlockingTerminable nonBlocking;
++
++    private TerminationRegistration(@Nullable BlockingTerminable blocking, @Nullable NonBlockingTerminable nonBlocking) {
++        this.blocking = blocking;
++        this.nonBlocking = nonBlocking;
++    }
++
++    static TerminationRegistration blocking(BlockingTerminable blocking) {
++        return new TerminationRegistration(blocking, null);
++    }
++
++    static TerminationRegistration nonBlocking(NonBlockingTerminable nonBlocking) {
++        return new TerminationRegistration(null, nonBlocking);
++    }
++
++    static TerminationRegistration empty() {
++        return EMPTY;
++    }
++
++    @Nullable
++    BlockingTerminable blocking() {
++        return blocking;
++    }
++
++    @Nullable
++    NonBlockingTerminable nonBlocking() {
++        return nonBlocking;
++    }
++}
+diff --git a/src/main/java/io/github/leanish/terminator/TerminatorAutoRegistration.java b/src/main/java/io/github/leanish/terminator/TerminatorAutoRegistration.java
+new file mode 100644
+index 0000000..c127061
+--- /dev/null
++++ b/src/main/java/io/github/leanish/terminator/TerminatorAutoRegistration.java
+@@ -0,0 +1,61 @@
++/*
++ * Copyright (c) 2025 Leandro Aguiar
++ * Licensed under the MIT License.
++ * See LICENSE file in the project root for full license information.
++ */
++package io.github.leanish.terminator;
++
++import java.util.Objects;
++
++/**
++ * Registers managed services with a {@link Terminator} by inspecting their shutdown annotations or marker interfaces.
++ */
++public final class TerminatorAutoRegistration {
++
++    private final Terminator terminator;
++
++    /**
++     * Creates a new registrar that adds services to the supplied {@link Terminator} instance.
++     */
++    public TerminatorAutoRegistration(Terminator terminator) {
++        this.terminator = Objects.requireNonNull(terminator, "terminator");
++    }
++
++    /**
++     * Attempts to register the supplied service with the underlying {@link Terminator}. Services are recognised when
++     * they implement {@link BlockingTerminable}, {@link NonBlockingTerminable}, implement {@link AutoCloseable}, or
++     * expose appropriately annotated shutdown methods.
++     *
++     * @param candidate service to inspect
++     */
++    public void register(Object candidate) {
++        Objects.requireNonNull(candidate, "candidate");
++
++        if (candidate instanceof NonBlockingTerminable nonBlocking) {
++            terminator.register(nonBlocking);
++            return;
++        }
++        if (candidate instanceof BlockingTerminable blocking) {
++            terminator.register(blocking);
++            return;
++        }
++        TerminationRegistration registration = TerminationIntrospector.inspect(candidate);
++        if (registration.nonBlocking() != null) {
++            terminator.register(registration.nonBlocking());
++        } else if (registration.blocking() != null) {
++            terminator.register(registration.blocking());
++        }
++    }
++
++    /**
++     * Attempts to register every element of {@code candidates}.
++     */
++    public void registerAll(Iterable<?> candidates) {
++        Objects.requireNonNull(candidates, "candidates");
++        for (Object candidate : candidates) {
++            if (candidate != null) {
++                register(candidate);
++            }
++        }
++    }
++}
+diff --git a/src/main/java/io/github/leanish/terminator/annotation/AwaitsTermination.java b/src/main/java/io/github/leanish/terminator/annotation/AwaitsTermination.java
+new file mode 100644
+index 0000000..5359d79
+--- /dev/null
++++ b/src/main/java/io/github/leanish/terminator/annotation/AwaitsTermination.java
+@@ -0,0 +1,22 @@
++/*
++ * Copyright (c) 2025 Leandro Aguiar
++ * Licensed under the MIT License.
++ * See LICENSE file in the project root for full license information.
++ */
++package io.github.leanish.terminator.annotation;
++
++import static java.lang.annotation.ElementType.METHOD;
++import static java.lang.annotation.RetentionPolicy.RUNTIME;
++
++import java.lang.annotation.Documented;
++import java.lang.annotation.Retention;
++import java.lang.annotation.Target;
++
++/**
++ * Marks a method that waits for an asynchronous shutdown to complete.
++ */
++@Documented
++@Retention(RUNTIME)
++@Target(METHOD)
++public @interface AwaitsTermination {
++}
+diff --git a/src/main/java/io/github/leanish/terminator/annotation/Terminates.java b/src/main/java/io/github/leanish/terminator/annotation/Terminates.java
+new file mode 100644
+index 0000000..f64c9fb
+--- /dev/null
++++ b/src/main/java/io/github/leanish/terminator/annotation/Terminates.java
+@@ -0,0 +1,22 @@
++/*
++ * Copyright (c) 2025 Leandro Aguiar
++ * Licensed under the MIT License.
++ * See LICENSE file in the project root for full license information.
++ */
++package io.github.leanish.terminator.annotation;
++
++import static java.lang.annotation.ElementType.METHOD;
++import static java.lang.annotation.RetentionPolicy.RUNTIME;
++
++import java.lang.annotation.Documented;
++import java.lang.annotation.Retention;
++import java.lang.annotation.Target;
++
++/**
++ * Marks a method that initiates shutdown of a service.
++ */
++@Documented
++@Retention(RUNTIME)
++@Target(METHOD)
++public @interface Terminates {
++}
+diff --git a/src/main/java/io/github/leanish/terminator/annotation/package-info.java b/src/main/java/io/github/leanish/terminator/annotation/package-info.java
+new file mode 100644
+index 0000000..a60a3c4
+--- /dev/null
++++ b/src/main/java/io/github/leanish/terminator/annotation/package-info.java
+@@ -0,0 +1,7 @@
++/**
++ * Public annotations that describe how to terminate managed services.
++ */
++@NullMarked
++package io.github.leanish.terminator.annotation;
++
++import org.jspecify.annotations.NullMarked;
+diff --git a/src/test/java/io/github/leanish/terminator/TerminatorAutoRegistrationTest.java b/src/test/java/io/github/leanish/terminator/TerminatorAutoRegistrationTest.java
+new file mode 100644
+index 0000000..5248321
+--- /dev/null
++++ b/src/test/java/io/github/leanish/terminator/TerminatorAutoRegistrationTest.java
+@@ -0,0 +1,191 @@
++/*
++ * Copyright (c) 2025 Leandro Aguiar
++ * Licensed under the MIT License.
++ * See LICENSE file in the project root for full license information.
++ */
++package io.github.leanish.terminator;
++
++import static org.assertj.core.api.Assertions.*;
++
++import io.github.leanish.terminator.annotation.AwaitsTermination;
++import io.github.leanish.terminator.annotation.Terminates;
++import java.time.Duration;
++import java.util.List;
++import java.util.concurrent.CountDownLatch;
++import java.util.concurrent.TimeUnit;
++import java.util.concurrent.atomic.AtomicBoolean;
++import org.junit.jupiter.api.Test;
++
++class TerminatorAutoRegistrationTest {
++
++    private final Terminator terminator = new Terminator();
++    private final TerminatorAutoRegistration registration = new TerminatorAutoRegistration(terminator);
++
++    @Test
++    void registersBlockingServiceAnnotatedWithTerminates()
++            throws InterruptedException {
++        AnnotatedBlockingService service = new AnnotatedBlockingService();
++
++        registration.register(service);
++        terminator.terminate();
++
++        assertThat(service.terminated).isTrue();
++    }
++
++    @Test
++    void registersAutoCloseableAsBlocking()
++            throws InterruptedException {
++        TrackingAutoCloseable closeable = new TrackingAutoCloseable();
++
++        registration.register(closeable);
++        terminator.terminate();
++
++        assertThat(closeable.closed).isTrue();
++    }
++
++    @Test
++    void registersNonBlockingServiceWithDurationAwait()
++            throws InterruptedException {
++        AnnotatedNonBlockingService service = new AnnotatedNonBlockingService();
++
++        registration.register(service);
++        terminator.terminate();
++
++        assertThat(service.shutdownInitiated).isTrue();
++        assertThat(terminator.awaitTermination(Duration.ofMillis(10))).isFalse();
++        service.complete();
++        assertThat(terminator.awaitTermination(Duration.ofSeconds(1))).isTrue();
++    }
++
++    @Test
++    void registersNonBlockingServiceWithNumericAwait()
++            throws InterruptedException {
++        NumericAwaitNonBlockingService service = new NumericAwaitNonBlockingService();
++
++        registration.register(service);
++        terminator.terminate();
++
++        assertThat(service.shutdownCalled).isTrue();
++        assertThat(terminator.awaitTermination(Duration.ofMillis(5))).isFalse();
++        service.finish();
++        assertThat(terminator.awaitTermination(Duration.ofSeconds(1))).isTrue();
++        assertThat(service.awaitTimeouts).hasSize(2);
++        assertThat(service.awaitTimeouts.getFirst())
++                .isGreaterThanOrEqualTo(0L)
++                .isLessThanOrEqualTo(Duration.ofMillis(5).toNanos());
++        assertThat(service.awaitTimeouts.getLast())
++                .isGreaterThan(0L)
++                .isLessThanOrEqualTo(Duration.ofSeconds(1).toNanos());
++        assertThat(service.awaitUnits).allMatch(unit -> unit == TimeUnit.NANOSECONDS);
++    }
++
++    @Test
++    void registerAllSkipsNulls()
++            throws InterruptedException {
++        AnnotatedBlockingService first = new AnnotatedBlockingService();
++        AnnotatedBlockingService second = new AnnotatedBlockingService();
++
++        registration.registerAll(java.util.Arrays.asList(first, null, second));
++        terminator.terminate();
++
++        assertThat(first.terminated).isTrue();
++        assertThat(second.terminated).isTrue();
++    }
++
++    @Test
++    void failsWhenMultipleAwaitsTerminationMethodsPresent() {
++        InvalidAwaitService service = new InvalidAwaitService();
++
++        assertThatThrownBy(() -> registration.register(service))
++                .isInstanceOf(IllegalStateException.class)
++                .hasMessageContaining("Multiple methods");
++    }
++
++    @SuppressWarnings("unused")
++    private static final class AnnotatedBlockingService {
++
++        private boolean terminated;
++
++        @Terminates
++        void shutdown() {
++            terminated = true;
++        }
++    }
++
++    private static final class TrackingAutoCloseable implements AutoCloseable {
++
++        private boolean closed;
++
++        @Override
++        public void close() {
++            closed = true;
++        }
++    }
++
++    @SuppressWarnings("unused")
++    private static final class AnnotatedNonBlockingService {
++
++        private final CountDownLatch latch = new CountDownLatch(1);
++        private final AtomicBoolean shutdownInitiated = new AtomicBoolean();
++
++        @Terminates
++        void shutdown() {
++            shutdownInitiated.set(true);
++        }
++
++        @AwaitsTermination
++        boolean waitForCompletion(Duration timeout)
++                throws InterruptedException {
++            return latch.await(timeout.toNanos(), TimeUnit.NANOSECONDS);
++        }
++
++        void complete() {
++            latch.countDown();
++        }
++    }
++
++    @SuppressWarnings("unused")
++    private static final class NumericAwaitNonBlockingService {
++
++        private final CountDownLatch latch = new CountDownLatch(1);
++        private final AtomicBoolean shutdownCalled = new AtomicBoolean();
++        private final java.util.List<Long> awaitTimeouts = new java.util.ArrayList<>();
++        private final java.util.List<TimeUnit> awaitUnits = new java.util.ArrayList<>();
++
++        @Terminates
++        void shutdown() {
++            shutdownCalled.set(true);
++        }
++
++        @AwaitsTermination
++        boolean await(long timeout, TimeUnit unit)
++                throws InterruptedException {
++            awaitTimeouts.add(timeout);
++            awaitUnits.add(unit);
++            boolean done = latch.await(timeout, unit);
++            return done;
++        }
++
++        void finish() {
++            latch.countDown();
++        }
++    }
++
++    @SuppressWarnings("unused")
++    private static final class InvalidAwaitService {
++
++        @Terminates
++        void shutdown() {
++        }
++
++        @AwaitsTermination
++        boolean awaitOne(Duration timeout) {
++            return true;
++        }
++
++        @AwaitsTermination
++        boolean awaitTwo(Duration timeout) {
++            return true;
++        }
++    }
++}

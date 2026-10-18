@@ -1,0 +1,36 @@
+diff --git a/build.gradle b/build.gradle
+index 18fef39..a01d628 100644
+--- a/build.gradle
++++ b/build.gradle
+@@ -2,6 +2,7 @@ plugins {
+     id 'java-library'
+     id 'maven-publish'
+     id 'com.diffplug.spotless' version '7.2.1'
++    id 'net.ltgt.errorprone' version '3.1.0'
+ }
+ 
+ group = 'io.github.leanish'
+@@ -23,11 +24,23 @@ repositories {
+ dependencies {
+     compileOnly 'org.jspecify:jspecify:1.0.0'
+     testCompileOnly 'org.jspecify:jspecify:1.0.0'
++    errorprone 'com.google.errorprone:error_prone_core:2.29.2'
++    errorprone 'com.uber.nullaway:nullaway:0.11.0'
+     testImplementation 'org.junit.jupiter:junit-jupiter:5.13.4'
+     testImplementation 'org.assertj:assertj-core:3.27.6'
+     testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.13.4'
+ }
+ 
++tasks.withType(JavaCompile).configureEach {
++    options.errorprone {
++        disableWarningsInGeneratedCode = true
++        errorproneArgs.addAll([
++            '-Xep:NullAway:ERROR',
++            '-XepOpt:NullAway:AnnotatedPackages=io.github.leanish.terminator'
++        ])
++    }
++}
++
+ tasks.withType(Test).configureEach {
+     useJUnitPlatform()
+ }

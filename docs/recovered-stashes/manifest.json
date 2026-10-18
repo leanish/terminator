@@ -1,0 +1,65 @@
+[
+  {
+    "stash": 0,
+    "original_commit": "7a0ce14c7bdbf671d772fb4b6b05bd902f72e425",
+    "base_commit": "e3d0b132ae084ba7510ac75e874b34635ebb5b79",
+    "description": "2026-02-11 On main: temp",
+    "patch": "stash-0.patch",
+    "sha256": "a3900afee6dfd7b38839d2d1d8fccef2cc4860fdc71dc4e90521d8b512d6fefb",
+    "staged_patch": "stash-0-staged.patch"
+  },
+  {
+    "stash": 1,
+    "original_commit": "ee7300daec4e9d5e19b0831f78ebff11b013f2d5",
+    "base_commit": "8e040809f6c7a91edf6e6f3681a58c1701cb3866",
+    "description": "2025-12-07 On main: continue",
+    "patch": "stash-1.patch",
+    "sha256": "52c67d780bf36a8d2f12257c7bbe6dc815bf8b0cd71727dabfc4652813fd646d",
+    "staged_patch": "stash-1-staged.patch"
+  },
+  {
+    "stash": 2,
+    "original_commit": "a287c62c8f2a34398eda542b745d850ab6781e56",
+    "base_commit": "8e040809f6c7a91edf6e6f3681a58c1701cb3866",
+    "description": "2025-10-01 On main: temp",
+    "patch": "stash-2.patch",
+    "sha256": "52c67d780bf36a8d2f12257c7bbe6dc815bf8b0cd71727dabfc4652813fd646d",
+    "staged_patch": "stash-2-staged.patch"
+  },
+  {
+    "stash": 3,
+    "original_commit": "d931b3eb4f2b719c437e7cefcb96745d3d0ebb8e",
+    "base_commit": "8e040809f6c7a91edf6e6f3681a58c1701cb3866",
+    "description": "2025-10-01 On main: continue",
+    "patch": "stash-3.patch",
+    "sha256": "79df83b066f29e8a827578f42daddcf70c3bad054c2b7f808fab90d9c4a49b71",
+    "staged_patch": "stash-3-staged.patch"
+  },
+  {
+    "stash": 4,
+    "original_commit": "3bd3ea283d067cabea7dc16f3e9894fcbd91e25d",
+    "base_commit": "56a2f27a2202b821e61f695d1bdfa1cec0a178e4",
+    "description": "2025-09-30 On main: temp",
+    "patch": "stash-4.patch",
+    "sha256": "1acb01ef9da485d3e5557b76bd064845c34093cb11ae1d40a984d6b004d75e78",
+    "staged_patch": "stash-4-staged.patch"
+  },
+  {
+    "stash": 5,
+    "original_commit": "041b6af183b2987e40ee0f62905b082a2745b6ef",
+    "base_commit": "de9c13c68abde9d387f4a2949214c9e5d793156c",
+    "description": "2025-09-29 On main: temp",
+    "patch": "stash-5.patch",
+    "sha256": "1962611310e6a2f89ec34256a0671c7c511597fbeeb21d00b352f901bad54ed8",
+    "staged_patch": "stash-5-staged.patch"
+  },
+  {
+    "stash": 6,
+    "original_commit": "e26672d7d56bc8e006c7e12259738002432dec20",
+    "base_commit": "454074cb64f9b81cde02a1fc15753741f7f92cb5",
+    "description": "2025-09-28 On main: readme improvements",
+    "patch": "stash-6.patch",
+    "sha256": "809f378d20753793daa6428cf27c23deefd24c6d3aadf7070c73713d9dd24365",
+    "staged_patch": "stash-6-staged.patch"
+  }
+]

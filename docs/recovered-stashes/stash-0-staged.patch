@@ -1,0 +1,167 @@
+diff --git a/.github/dependabot.yml b/.github/dependabot.yml
+index 1ef0730..dbe3b0d 100644
+--- a/.github/dependabot.yml
++++ b/.github/dependabot.yml
+@@ -4,6 +4,10 @@ updates:
+     directory: "/"
+     schedule:
+       interval: "daily"
++    groups:
++      patch-updates:
++        update-types:
++          - "patch"
+   - package-ecosystem: "github-actions"
+     directory: "/"
+     schedule:
+diff --git a/build.gradle b/build.gradle
+index a2426aa..e2fc4f4 100644
+--- a/build.gradle
++++ b/build.gradle
+@@ -1,100 +1,20 @@
+ plugins {
+     id 'java-library'
+-    id 'maven-publish'
+-    id 'com.diffplug.spotless' version '8.1.0'
+-    id 'net.ltgt.errorprone' version '4.3.0'
++    id 'io.github.leanish.java-conventions' version '0.3.0-SNAPSHOT'
+ }
+ 
+ group = 'io.github.leanish'
+ version = '0.1.0'
++description = 'Coordinates shutdown of blocking and non-blocking services.'
+ 
++def jdkVersion = 21
+ java {
++    sourceCompatibility = JavaVersion.toVersion(jdkVersion)
+     toolchain {
+-        languageVersion = JavaLanguageVersion.of(21)
++        languageVersion = JavaLanguageVersion.of(jdkVersion)
+     }
+-    withSourcesJar()
+-    withJavadocJar()
+-}
+-
+-repositories {
+-    mavenLocal()
+-    mavenCentral()
+-}
+-
+-dependencies {
+-    compileOnly 'org.jspecify:jspecify:1.0.0'
+-    testCompileOnly 'org.jspecify:jspecify:1.0.0'
+-    errorprone 'com.google.errorprone:error_prone_core:2.46.0'
+-    errorprone 'com.uber.nullaway:nullaway:0.12.15'
+-    testImplementation 'org.junit.jupiter:junit-jupiter:6.0.2'
+-    testImplementation 'org.assertj:assertj-core:3.27.6'
+-    testRuntimeOnly 'org.junit.platform:junit-platform-launcher:6.0.2'
+ }
+ 
+ tasks.withType(JavaCompile).configureEach {
+-    // Required from errorprone 2.46.0+ on JDK 21
+-    options.compilerArgs.add("-XDaddTypeAnnotationsToSymbol=true")
+-    options.errorprone {
+-        disableWarningsInGeneratedCode = true
+-        errorproneArgs.addAll([
+-            '-Xep:NullAway:ERROR',
+-            '-XepOpt:NullAway:AnnotatedPackages=io.github.leanish'
+-        ])
+-    }
+-}
+-
+-tasks.withType(Test).configureEach {
+-    useJUnitPlatform()
+-}
+-
+-publishing {
+-    publications {
+-        create('mavenJava', MavenPublication) {
+-            from components.java
+-            pom {
+-                name = 'Terminator'
+-                description = 'Coordinates shutdown of blocking and non-blocking services.'
+-                url = 'https://github.com/lean-ish/terminator'
+-                licenses {
+-                    license {
+-                        name = 'The MIT License'
+-                        url = 'https://opensource.org/licenses/MIT'
+-                    }
+-                }
+-                developers {
+-                    developer {
+-                        id = 'lean-ish'
+-                        name = 'Leandro Aguiar'
+-                        url = 'https://github.com/lean-ish'
+-                    }
+-                }
+-                scm {
+-                    url = 'https://github.com/lean-ish/terminator'
+-                    connection = 'scm:git:https://github.com/lean-ish/terminator.git'
+-                    developerConnection = 'scm:git:ssh://git@github.com/lean-ish/terminator.git'
+-                }
+-            }
+-        }
+-    }
+-
+-    repositories {
+-        mavenLocal()
+-        maven {
+-            name = 'GitHubPackages'
+-            url = uri('https://maven.pkg.github.com/lean-ish/terminator')
+-            credentials {
+-                username = project.findProperty('gpr.user') ?: System.getenv('GITHUB_ACTOR')
+-                password = project.findProperty('gpr.key') ?: System.getenv('GITHUB_TOKEN')
+-            }
+-        }
+-    }
+-}
+-
+-spotless {
+-    java {
+-        trimTrailingWhitespace()
+-        endWithNewline()
+-        removeUnusedImports()
+-        licenseHeaderFile 'LICENSE_HEADER'
+-    }
++    options.release.set(jdkVersion)
+ }
+diff --git a/settings.gradle b/settings.gradle
+index 65dc4af..33fdc8d 100644
+--- a/settings.gradle
++++ b/settings.gradle
+@@ -1 +1,8 @@
++pluginManagement {
++    repositories {
++        gradlePluginPortal()
++        mavenCentral()
++    }
++}
++
+ rootProject.name = 'terminator'
+diff --git a/src/main/java/io/github/leanish/terminator/Terminator.java b/src/main/java/io/github/leanish/terminator/Terminator.java
+index 10c2a87..77d8711 100644
+--- a/src/main/java/io/github/leanish/terminator/Terminator.java
++++ b/src/main/java/io/github/leanish/terminator/Terminator.java
+@@ -105,7 +105,7 @@ public final class Terminator {
+             } catch (InterruptedException e) {
+                 Thread.currentThread().interrupt();
+                 throw e;
+-            } catch (RuntimeException | Error ex) {
++            } catch (RuntimeException ex) {
+                 if (failure == null) {
+                     failure = new TerminationException("Failed to terminate registered services", ex);
+                 } else {
+diff --git a/src/test/java/io/github/leanish/terminator/TerminatorTest.java b/src/test/java/io/github/leanish/terminator/TerminatorTest.java
+index fa36ba7..b4ff130 100644
+--- a/src/test/java/io/github/leanish/terminator/TerminatorTest.java
++++ b/src/test/java/io/github/leanish/terminator/TerminatorTest.java
+@@ -5,7 +5,9 @@
+  */
+ package io.github.leanish.terminator;
+ 
+-import static org.assertj.core.api.Assertions.*;
++import static org.assertj.core.api.Assertions.assertThat;
++import static org.assertj.core.api.Assertions.assertThatThrownBy;
++import static org.assertj.core.api.Assertions.catchThrowableOfType;
+ 
+ import java.time.Duration;
+ import java.util.ArrayList;
