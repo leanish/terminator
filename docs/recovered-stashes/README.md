@@ -7,7 +7,7 @@ material, not patches to apply indiscriminately to current main.
 | Stash | Topic | Current disposition |
 | --- | --- | --- |
 | 0 | Java conventions migration, build setup and patch grouping | Superseded by current conventions and dependency automation; do not downgrade the build or restore retired Dependabot configuration. |
-| 1 | Annotation and AutoCloseable registration, documentation and tests | Split into separate AutoCloseable and shutdown-annotation pull requests. |
+| 1 | Annotation and AutoCloseable registration, documentation and tests | Preserved together, without code changes, in PR #55. |
 | 2 | Same file content as stash 1 | Preserved as originally saved; no separate implementation needed. |
 | 3 | Earlier registration prototype | Same feature as stash 1, with older nullability annotation placement. |
 | 4 | Error Prone setup and test concurrency refinements | Current main already contains the relevant build tooling, spin-wait and executor changes. |
