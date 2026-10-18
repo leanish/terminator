@@ -74,6 +74,21 @@ if (!finished) {
 }
 ```
 
+### Register AutoCloseable services
+
+`TerminatorAutoRegistration` registers `NonBlockingTerminable`, `BlockingTerminable`,
+and `AutoCloseable` services, in that precedence order. `close()` runs as a blocking
+shutdown; checked failures keep their cause and interruption remains visible.
+
+```java
+Terminator terminator = new Terminator();
+TerminatorAutoRegistration registration = new TerminatorAutoRegistration(terminator);
+registration.registerAll(List.of(httpServer, queueProcessor, closeableResource));
+```
+
+Unsupported objects are ignored; `registerAll` also skips null entries. Registration
+is explicit: this helper does not scan a dependency injection container.
+
 ## Building & testing
 
 This project uses Gradle 8 and Java 21:
